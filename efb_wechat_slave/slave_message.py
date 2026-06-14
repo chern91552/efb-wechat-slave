@@ -184,10 +184,32 @@ class SlaveMessageManager:
         if msg.chat.user_name == 'filehelper' and msg.text:
             cmd = msg.text.strip().lower()
             if cmd == 'session' or cmd == '会话状态':
-                self.channel.session_status("")
+                result = self.channel.session_status("")
+                if result and getattr(coordinator, 'master', None):
+                    chat, author = self.get_chat_and_author(msg)
+                    reply = Message(
+                        uid=f"__session_reply_{uuid.uuid4()}",
+                        type=MsgType.Text,
+                        chat=chat,
+                        author=chat.self if chat.self else author,
+                        deliver_to=coordinator.master,
+                        text=result,
+                    )
+                    coordinator.send_message(reply)
                 return None
             elif cmd == 'reauth' or cmd == '重新登录':
-                self.channel.get_qr_code_early("")
+                result = self.channel.get_qr_code_early("")
+                if result and getattr(coordinator, 'master', None):
+                    chat, author = self.get_chat_and_author(msg)
+                    reply = Message(
+                        uid=f"__reauth_reply_{uuid.uuid4()}",
+                        type=MsgType.Text,
+                        chat=chat,
+                        author=chat.self if chat.self else author,
+                        deliver_to=coordinator.master,
+                        text=result,
+                    )
+                    coordinator.send_message(reply)
                 return None
 
         if msg.chat.user_name == "newsapp" and msg.text.startswith("<mmreader>"):

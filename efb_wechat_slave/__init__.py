@@ -205,7 +205,7 @@ class WeChatChannel(SlaveChannel):
             self.logger.warning(f"Failed to load login time: {e}")
 
     def _save_login_time(self):
-        """Save login time to file."""
+        """Save login time to file and notify filehelper."""
         try:
             self.login_time = datetime.now()
             self._sent_reminders.clear()
@@ -215,6 +215,7 @@ class WeChatChannel(SlaveChannel):
             self.logger.info(f"Login time saved: {self.login_time}")
         except Exception as e:
             self.logger.error(f"Failed to save login time: {e}")
+        self._send_to_filehelper(self._("Successfully logged in."))
 
     def _start_expiry_monitor(self):
         """Start the expiry monitor thread."""
