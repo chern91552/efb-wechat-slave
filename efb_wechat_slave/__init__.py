@@ -164,14 +164,15 @@ class WeChatChannel(SlaveChannel):
         self.login_time_file = efb_utils.get_data_path(self.channel_id) / "login_time.json"
         self._load_login_time()
 
-        self.authenticate('console_qr_code', first_start=True)
+        self.user_auth_chat = SystemChat(channel=self,
+                                         name=self._("EWS User Auth"),
+                                         uid=ChatID("__ews_user_auth__"))
+
+        self.authenticate(self.flag('qr_reload'), first_start=True)
 
         # Managers
         self.slave_message: SlaveMessageManager = SlaveMessageManager(self)
         self.chats: ChatManager = ChatManager(self)
-        self.user_auth_chat = SystemChat(channel=self,
-                                         name=self._("EWS User Auth"),
-                                         uid=ChatID("__ews_user_auth__"))
 
         # Start expiry monitor
         self._start_expiry_monitor()
@@ -254,7 +255,7 @@ class WeChatChannel(SlaveChannel):
 您的微信网页版登录将在 {days_remaining} 天后过期。
 
 发送 'session' 查看当前状态。
-发送 'getqr' 获取提前登录二维码。"""
+发送 'reauth' 重新登录。"""
 
         # Send through EFB to Telegram master channel
         try:
@@ -324,40 +325,47 @@ class WeChatChannel(SlaveChannel):
         if self.qr_uuid == (uuid, status):
             return
         self.qr_uuid = (uuid, status)
+        # Also show QR code in console
+        self.qr_uuid = ('', 0)  # reset to bypass dedup in console_qr_code
+        self.console_qr_code(uuid, status, qrcode)
+        self.qr_uuid = (uuid, status)  # restore
 
-        msg = Message(
-            uid=f"ews_auth_{uuid}_{status}_{uuid4()}",
-            type=MsgType.Text,
-            chat=self.user_auth_chat,
-            author=self.user_auth_chat.other,
-            deliver_to=coordinator.master,
-        )
+        try:
+            msg = Message(
+                uid=f"ews_auth_{uuid}_{status}_{uuid4()}",
+                type=MsgType.Text,
+                chat=self.user_auth_chat,
+                author=self.user_auth_chat.other,
+                deliver_to=coordinator.master,
+            )
 
-        if status == 201:
-            msg.type = MsgType.Text
-            msg.text = self._('Confirm on your phone.')
-            self.master_qr_picture_id = None
-        elif status == 200:
-            msg.type = MsgType.Text
-            msg.text = self._("Successfully logged in.")
-            self.master_qr_picture_id = None
-        else:  # status is 0 (initial) or 408 (expired)
-            msg.type = MsgType.Image
-            file = NamedTemporaryFile(suffix=".png")
-            qr_url = "https://login.weixin.qq.com/l/" + uuid
-            QRCode(qr_url).png(file, scale=10)
-            msg.text = self._("QR code expired, please scan the new one.")
-            msg.path = Path(file.name)
-            msg.file = file
-            msg.mime = 'image/png'
-            if self.master_qr_picture_id is not None:
-                msg.edit = True
-                msg.edit_media = True
-                msg.uid = self.master_qr_picture_id
-            else:
-                self.master_qr_picture_id = msg.uid
-        if status in (200, 201) or msg.type == MsgType.Image:
-            coordinator.send_message(msg)
+            if status == 201:
+                msg.type = MsgType.Text
+                msg.text = self._('Confirm on your phone.')
+                self.master_qr_picture_id = None
+            elif status == 200:
+                msg.type = MsgType.Text
+                msg.text = self._("Successfully logged in.")
+                self.master_qr_picture_id = None
+            else:  # status is 0 (initial) or 408 (expired)
+                msg.type = MsgType.Image
+                file = NamedTemporaryFile(suffix=".png")
+                qr_url = "https://login.weixin.qq.com/l/" + uuid
+                QRCode(qr_url).png(file, scale=10)
+                msg.text = self._("QR code expired, please scan the new one.")
+                msg.path = Path(file.name)
+                msg.file = file
+                msg.mime = 'image/png'
+                if self.master_qr_picture_id is not None:
+                    msg.edit = True
+                    msg.edit_media = True
+                    msg.uid = self.master_qr_picture_id
+                else:
+                    self.master_qr_picture_id = msg.uid
+            if status in (200, 201) or msg.type == MsgType.Image:
+                coordinator.send_message(msg)
+        except Exception as e:
+            self.logger.exception('Failed to send QR code to master: %s', e)
 
     def exit_callback(self):
         # Don't send prompt if there's nowhere to send.
@@ -776,7 +784,7 @@ class WeChatChannel(SlaveChannel):
 
 状态: 未记录登录时间
 
-发送 'getqr' 获取登录二维码。"""
+发送 'reauth' 重新登录。"""
 
         # Send to filehelper as well
         self._send_to_filehelper(status)
@@ -786,29 +794,8 @@ class WeChatChannel(SlaveChannel):
            desc=_("Get login QR code for early re-authentication.\n"
                   "Usage: {function_name}"))
     def get_qr_code_early(self, _: str = "") -> str:
-        """Get QR code for early login."""
-        self._send_to_filehelper("📱 正在获取登录二维码...")
-
-        # Generate QR code
-        try:
-            from io import BytesIO
-            qr_uuid = self.bot.core.uuid
-            qr_url = f"https://login.weixin.qq.com/l/{qr_uuid}"
-            qr_obj = QRCode(qr_url)
-
-            qr_file = BytesIO()
-            qr_obj.png(qr_file, scale=10)
-            qr_file.seek(0)
-
-            # Send QR code image
-            self.bot.file_helper.send_image(qr_file)
-            self._send_to_filehelper("✅ 请扫描上方二维码提前登录")
-            return "QR code sent to filehelper."
-        except Exception as e:
-            error_msg = "❌ 获取二维码失败"
-            self._send_to_filehelper(error_msg)
-            self.logger.error(f"Failed to get QR code: {e}")
-            return error_msg
+        """Get QR code for early login by triggering reauth."""
+        return self.reauth(command=True)
 
     # region [Command functions]
 

@@ -186,7 +186,7 @@ class SlaveMessageManager:
             if cmd == 'session' or cmd == '会话状态':
                 self.channel.session_status("")
                 return None
-            elif cmd == 'getqr' or cmd == '获取二维码':
+            elif cmd == 'reauth' or cmd == '重新登录':
                 self.channel.get_qr_code_early("")
                 return None
 
