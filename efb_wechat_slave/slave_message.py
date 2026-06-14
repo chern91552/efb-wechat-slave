@@ -155,7 +155,7 @@ class SlaveMessageManager:
             def thread_wrapper(*args, **kwargs):
                 """Run message requests in separate threads to prevent blocking"""
                 threading.Thread(target=wrap_func, args=args, kwargs=kwargs,
-                                 name=f"EWS slave message thread running {func}").run()
+                                 name=f"EWS slave message thread running {func.__name__}").start()
 
             return thread_wrapper
 
@@ -179,6 +179,16 @@ class SlaveMessageManager:
 
     @Decorators.wechat_msg_meta
     def wechat_text_msg(self, msg: wxpy.Message) -> Optional[Message]:
+        # Handle commands from filehelper
+        if msg.chat.user_name == 'filehelper' and msg.text:
+            cmd = msg.text.strip().lower()
+            if cmd == 'session' or cmd == '会话状态':
+                self.channel.session_status("")
+                return None
+            elif cmd == 'getqr' or cmd == '获取二维码':
+                self.channel.get_qr_code_early("")
+                return None
+
         if msg.chat.user_name == "newsapp" and msg.text.startswith("<mmreader>"):
             return self.wechat_newsapp_msg(msg)
         if msg.text.startswith("http://weixin.qq.com/cgi-bin/redirectforward?args="):

@@ -7,7 +7,8 @@ import tempfile
 import time
 import threading
 from gettext import translation
-from json import JSONDecodeError
+from datetime import datetime, timedelta
+import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Dict, Optional, List, Tuple, Callable, BinaryIO, IO
@@ -158,6 +159,11 @@ class WeChatChannel(SlaveChannel):
         self.qr_uuid: Tuple[str, int] = ('', 0)
         self.master_qr_picture_id: Optional[str] = None
 
+        # Login time tracking
+        self.login_time: Optional[datetime] = None
+        self.login_time_file = efb_utils.get_data_path(self.channel_id) / "login_time.json"
+        self._load_login_time()
+
         self.authenticate('console_qr_code', first_start=True)
 
         # Managers
@@ -166,6 +172,9 @@ class WeChatChannel(SlaveChannel):
         self.user_auth_chat = SystemChat(channel=self,
                                          name=self._("EWS User Auth"),
                                          uid=ChatID("__ews_user_auth__"))
+
+        # Start expiry monitor
+        self._start_expiry_monitor()
 
     def load_config(self):
         """
@@ -182,6 +191,75 @@ class WeChatChannel(SlaveChannel):
                 return
             self.config: Dict[str, Any] = d
 
+    # Login time tracking methods
+    def _load_login_time(self):
+        """Load saved login time from file."""
+        try:
+            if self.login_time_file.exists():
+                with open(self.login_time_file, 'r') as f:
+                    data = json.load(f)
+                    self.login_time = datetime.fromisoformat(data['login_time'])
+                    self.logger.info(f"Login time loaded: {self.login_time}")
+        except Exception as e:
+            self.logger.warning(f"Failed to load login time: {e}")
+
+    def _save_login_time(self):
+        """Save login time to file."""
+        try:
+            self.login_time = datetime.now()
+            data = {'login_time': self.login_time.isoformat()}
+            with open(self.login_time_file, 'w') as f:
+                json.dump(data, f)
+            self.logger.info(f"Login time saved: {self.login_time}")
+        except Exception as e:
+            self.logger.error(f"Failed to save login time: {e}")
+
+    def _start_expiry_monitor(self):
+        """Start the expiry monitor thread."""
+        def monitor():
+            while True:
+                if self.login_time:
+                    expiry_time = self.login_time + timedelta(days=30)
+                    days_remaining = (expiry_time - datetime.now()).days
+
+                    # Send reminder on specific days
+                    if days_remaining in [5, 3, 1]:
+                        self._send_expiry_reminder(days_remaining)
+
+                time.sleep(3600)  # Check every hour
+
+        threading.Thread(target=monitor, name="EWS Expiry Monitor", daemon=True).start()
+        self.logger.info("Expiry monitor started")
+
+    def _send_expiry_reminder(self, days_remaining: int):
+        """Send expiry reminder to filehelper."""
+        if days_remaining <= 0:
+            return
+
+        if days_remaining == 1:
+            urgency = "🔴 紧急"
+        elif days_remaining <= 3:
+            urgency = "🟡 警告"
+        else:
+            urgency = "🟢 提醒"
+
+        text = f"""{urgency} 登录到期提醒
+
+您的微信网页版登录将在 {days_remaining} 天后过期。
+
+发送 'session' 查看当前状态。
+发送 'getqr' 获取提前登录二维码。"""
+
+        self._send_to_filehelper(text)
+
+    def _send_to_filehelper(self, text: str):
+        """Send message to filehelper."""
+        try:
+            self.bot.file_helper.send(text)
+            self.logger.info(f"Message sent to filehelper: {text[:50]}...")
+        except Exception as e:
+            self.logger.error(f"Failed to send to filehelper: {e}")
+
     #
     # Utilities
     #
@@ -196,6 +274,7 @@ class WeChatChannel(SlaveChannel):
             return self.logger.log(99, qr)
         elif status == 200:
             qr = self._("Successfully logged in.")
+            self._save_login_time()  # Record login time on success
             return self.logger.log(99, qr)
         else:
             # 0: First QR code
@@ -241,7 +320,7 @@ class WeChatChannel(SlaveChannel):
             msg.type = MsgType.Text
             msg.text = self._("Successfully logged in.")
             self.master_qr_picture_id = None
-        elif uuid != self.qr_uuid:
+        else:  # status is 0 (initial) or 408 (expired)
             msg.type = MsgType.Image
             file = NamedTemporaryFile(suffix=".png")
             qr_url = "https://login.weixin.qq.com/l/" + uuid
@@ -256,7 +335,7 @@ class WeChatChannel(SlaveChannel):
                 msg.uid = self.master_qr_picture_id
             else:
                 self.master_qr_picture_id = msg.uid
-        if status in (200, 201) or uuid != self.qr_uuid:
+        if status in (200, 201) or msg.type == MsgType.Image:
             coordinator.send_message(msg)
 
     def exit_callback(self):
@@ -657,6 +736,58 @@ class WeChatChannel(SlaveChannel):
         self.bot.logout()
         self.exit_callback()
         return self._("Done.")
+
+    @extra(name=_("Session status"),
+           desc=_("Show current login session status.\n"
+                  "Usage: {function_name}"))
+    def session_status(self, _: str = "") -> str:
+        """Show current session status."""
+        if self.login_time:
+            expiry_time = self.login_time + timedelta(days=30)
+            days_remaining = (expiry_time - datetime.now()).days
+            status = f"""📊 会话状态
+
+登录时间: {self.login_time.strftime('%Y-%m-%d %H:%M')}
+过期时间: {expiry_time.strftime('%Y-%m-%d %H:%M')}
+剩余天数: {days_remaining} 天"""
+        else:
+            status = """📊 会话状态
+
+状态: 未记录登录时间
+
+发送 'getqr' 获取登录二维码。"""
+
+        # Send to filehelper as well
+        self._send_to_filehelper(status)
+        return status
+
+    @extra(name=_("Get QR code"),
+           desc=_("Get login QR code for early re-authentication.\n"
+                  "Usage: {function_name}"))
+    def get_qr_code_early(self, _: str = "") -> str:
+        """Get QR code for early login."""
+        self._send_to_filehelper("📱 正在获取登录二维码...")
+
+        # Generate QR code
+        try:
+            from io import BytesIO
+            qr_uuid = self.bot.core.uuid
+            qr_url = f"https://login.weixin.qq.com/l/{qr_uuid}"
+            qr_obj = QRCode(qr_url)
+
+            qr_file = BytesIO()
+            qr_obj.png(qr_file, scale=10)
+            qr_file.seek(0)
+
+            # Send QR code image
+            self.bot.file_helper.send_image(qr_file)
+            self._send_to_filehelper("✅ 请扫描上方二维码提前登录")
+            return "QR code sent to filehelper."
+        except Exception as e:
+            error_msg = "❌ 获取二维码失败"
+            self._send_to_filehelper(error_msg)
+            self.logger.error(f"Failed to get QR code: {e}")
+            return error_msg
 
     # region [Command functions]
 

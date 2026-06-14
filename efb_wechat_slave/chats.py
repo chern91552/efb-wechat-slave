@@ -168,17 +168,22 @@ class ChatManager:
                 raise EFBChatNotFound()
 
     def search_member(self, uid: str, member_id: str, refresh: bool = False) -> Chat:
-        group = self.search_chat(uid)
-        if not isinstance(group, wxpy.Group):
+        # Get the actual wxpy Group object first
+        wxpy_group = self.get_wxpy_chat_by_uid(uid)
+        if not isinstance(wxpy_group, wxpy.Group):
             raise EFBChatNotFound()
         try:
             if refresh:
                 self.bot.chats(True)
-            chat: wxpy.Chat = wxpy.utils.ensure_one(group.search(puid=member_id))
+                # Re-fetch the group after refresh
+                wxpy_group = self.get_wxpy_chat_by_uid(uid)
+                if not isinstance(wxpy_group, wxpy.Group):
+                    raise EFBChatNotFound()
+            chat: wxpy.Chat = wxpy.utils.ensure_one(wxpy_group.search(puid=member_id))
             return self.wxpy_chat_to_efb_chat(chat)
         except ValueError:
             if not refresh:
-                return self.search_chat(uid, refresh=True)
+                return self.search_member(uid, member_id, refresh=True)
             else:
                 raise EFBChatNotFound()
 
