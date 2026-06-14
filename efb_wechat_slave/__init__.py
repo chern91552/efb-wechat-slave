@@ -205,7 +205,7 @@ class WeChatChannel(SlaveChannel):
             self.logger.warning(f"Failed to load login time: {e}")
 
     def _save_login_time(self):
-        """Save login time to file and notify filehelper."""
+        """Save login time to file and notify login success."""
         try:
             self.login_time = datetime.now()
             self._sent_reminders.clear()
@@ -215,7 +215,28 @@ class WeChatChannel(SlaveChannel):
             self.logger.info(f"Login time saved: {self.login_time}")
         except Exception as e:
             self.logger.error(f"Failed to save login time: {e}")
-        self._send_to_filehelper(self._("Successfully logged in."))
+        # Delay notification until bot is fully ready
+        threading.Thread(target=self._notify_login_success, name="EWS login notify thread").start()
+
+    def _notify_login_success(self):
+        """Send login success notification to filehelper and Telegram."""
+        time.sleep(5)  # Wait for bot to fully initialize
+        success_msg = self._("Successfully logged in.")
+        self._send_to_filehelper(success_msg)
+        try:
+            if getattr(coordinator, 'master', None):
+                filehelper_chat = self.chats.wxpy_chat_to_efb_chat(self.bot.file_helper)
+                msg = Message(
+                    uid=f"__login_success_{uuid4()}",
+                    type=MsgType.Text,
+                    chat=filehelper_chat,
+                    author=filehelper_chat.self if filehelper_chat.self else filehelper_chat.other,
+                    deliver_to=coordinator.master,
+                    text=success_msg,
+                )
+                coordinator.send_message(msg)
+        except Exception as e:
+            self.logger.exception('Failed to send login success to master: %s', e)
 
     def _start_expiry_monitor(self):
         """Start the expiry monitor thread."""
@@ -813,6 +834,8 @@ class WeChatChannel(SlaveChannel):
         qr_reload = self.flag("qr_reload")
         if command and qr_reload == "console_qr_code":
             msg += "\n" + self._("Please check your log to continue.")
+
+        self._send_to_filehelper(msg)
 
         threading.Thread(target=self.authenticate, args=(
             qr_reload,), name="EWS reauth thread").start()
