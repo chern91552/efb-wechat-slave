@@ -26,7 +26,6 @@ setup(
               'wechat', 'weixin', 'chatbot'],
     classifiers=[
         "Development Status :: 3 - Alpha",
-        "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
         "Intended Audience :: Developers",
         "Intended Audience :: End Users/Desktop",
         "Programming Language :: Python :: 3 :: Only",
@@ -50,7 +49,6 @@ setup(
     extras_require={
         'tests': tests_require
     },
-    tests_require=tests_require,
     entry_points={
         'ehforwarderbot.slave': 'blueset.wechat = efb_wechat_slave:WeChatChannel',
         'ehforwarderbot.wizard': 'blueset.wechat = efb_wechat_slave.wizard:wizard'
