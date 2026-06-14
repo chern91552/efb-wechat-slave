@@ -790,8 +790,8 @@ class WeChatChannel(SlaveChannel):
         self._send_to_filehelper(status)
         return status
 
-    @extra(name=_("Get QR code"),
-           desc=_("Get login QR code for early re-authentication.\n"
+    @extra(name=_("Re-authenticate"),
+           desc=_("Re-authenticate WeChat login.\n"
                   "Usage: {function_name}"))
     def get_qr_code_early(self, _: str = "") -> str:
         """Get QR code for early login by triggering reauth."""
