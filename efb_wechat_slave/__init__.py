@@ -216,6 +216,8 @@ class WeChatChannel(SlaveChannel):
 
     def _start_expiry_monitor(self):
         """Start the expiry monitor thread."""
+        self._sent_reminders: set = set()
+
         def monitor():
             while True:
                 if self.login_time:
@@ -224,7 +226,10 @@ class WeChatChannel(SlaveChannel):
 
                     # Send reminder on specific days
                     if days_remaining in [5, 3, 1]:
-                        self._send_expiry_reminder(days_remaining)
+                        reminder_key = f"{self.login_time.isoformat()}_{days_remaining}"
+                        if reminder_key not in self._sent_reminders:
+                            self._send_expiry_reminder(days_remaining)
+                            self._sent_reminders.add(reminder_key)
 
                 time.sleep(3600)  # Check every hour
 
@@ -232,7 +237,7 @@ class WeChatChannel(SlaveChannel):
         self.logger.info("Expiry monitor started")
 
     def _send_expiry_reminder(self, days_remaining: int):
-        """Send expiry reminder to filehelper."""
+        """Send expiry reminder through EFB to Telegram."""
         if days_remaining <= 0:
             return
 
@@ -250,7 +255,23 @@ class WeChatChannel(SlaveChannel):
 发送 'session' 查看当前状态。
 发送 'getqr' 获取提前登录二维码。"""
 
-        self._send_to_filehelper(text)
+        # Send through EFB to Telegram master channel
+        try:
+            if getattr(coordinator, 'master', None):
+                msg = Message(
+                    uid=f"__expiry_reminder_{days_remaining}_{uuid4()}",
+                    type=MsgType.Text,
+                    chat=self.user_auth_chat,
+                    author=self.user_auth_chat.other,
+                    deliver_to=coordinator.master,
+                    text=text,
+                )
+                coordinator.send_message(msg)
+                self.logger.info(f"Expiry reminder sent to master: {days_remaining} days remaining")
+            else:
+                self.logger.warning("Master channel not available, cannot send expiry reminder")
+        except Exception as e:
+            self.logger.error(f"Failed to send expiry reminder through EFB: {e}")
 
     def _send_to_filehelper(self, text: str):
         """Send message to filehelper."""
@@ -274,7 +295,6 @@ class WeChatChannel(SlaveChannel):
             return self.logger.log(99, qr)
         elif status == 200:
             qr = self._("Successfully logged in.")
-            self._save_login_time()  # Record login time on success
             return self.logger.log(99, qr)
         else:
             # 0: First QR code
@@ -816,6 +836,7 @@ class WeChatChannel(SlaveChannel):
         with coordinator.mutex:
             self.bot: wxpy.Bot = wxpy.Bot(cache_path=str(efb_utils.get_data_path(self.channel_id) / "wxpy.pkl"),
                                           qr_callback=qr_callback,
+                                          login_callback=self._save_login_time,
                                           logout_callback=self.exit_callback,
                                           user_agent=self.flag('user_agent'),
                                           start_immediately=not first_start)
