@@ -1,6 +1,7 @@
 # coding: utf-8
 import base64
 import io
+import logging
 import os
 import subprocess
 import json
@@ -15,6 +16,8 @@ from .vendor import wxpy
 
 if TYPE_CHECKING:
     from . import WeChatChannel
+
+logger = logging.getLogger(__name__)
 
 WC_EMOTICON_CONVERSION = {
     '[微笑]': '😃', '[Smile]': '😃',
@@ -238,7 +241,7 @@ if os.name == "nt":
         """Convert Telegram GIF to real GIF, the NT way."""
         file.seek(0)
         new_file_size = os.path.getsize(file.name)
-        print(f"file_size: {new_file_size/1024}KB")
+        logger.debug("file_size: %.1fKB", new_file_size / 1024)
         if new_file_size > 1024 * 1024:
             # try to use gifsicle lossy compression
             compress_file = NamedTemporaryFile(suffix='.gif')
@@ -249,7 +252,7 @@ if os.name == "nt":
                 for scale in scales:
                     subprocess.run(["gifsicle", "--resize-method=catrom",  "--resize-fit", f"{scale}x{scale}", "--lossy=100", "-O2", "-o", compress_file.name, file.name], check=True)
                     new_file_size = os.path.getsize(compress_file.name)
-                    print(f"new_file_size: {new_file_size/1024}KB after resize to {scale}x{scale}")
+                    logger.debug("new_file_size: %.1fKB after resize to %dx%d", new_file_size / 1024, scale, scale)
                     if new_file_size < 1024 * 1024:
                         break
             file.close()
@@ -262,7 +265,7 @@ else:
         """Convert Telegram GIF to real GIF, the non-NT way."""
         file.seek(0)
         new_file_size = os.path.getsize(file.name)
-        print(f"file_size: {new_file_size/1024}KB")
+        logger.debug("file_size: %.1fKB", new_file_size / 1024)
         if new_file_size > 1024 * 1024:
             # try to use gifsicle lossy compression
             compress_file = NamedTemporaryFile(suffix='.gif')
@@ -273,7 +276,7 @@ else:
                 for scale in scales:
                     subprocess.run(["gifsicle", "--resize-method=catrom",  "--resize-fit", f"{scale}x{scale}", "--lossy=100", "-O2", "-o", compress_file.name, file.name], check=True)
                     new_file_size = os.path.getsize(compress_file.name)
-                    print(f"new_file_size: {new_file_size/1024}KB after resize to {scale}x{scale}")
+                    logger.debug("new_file_size: %.1fKB after resize to %dx%d", new_file_size / 1024, scale, scale)
                     if new_file_size < 1024 * 1024:
                         break
             file.close()

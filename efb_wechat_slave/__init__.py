@@ -2,13 +2,13 @@
 
 import io
 import json
+from json import JSONDecodeError
 import logging
 import tempfile
 import time
 import threading
 from gettext import translation
 from datetime import datetime, timedelta
-import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Dict, Optional, List, Tuple, Callable, BinaryIO, IO
@@ -207,6 +207,7 @@ class WeChatChannel(SlaveChannel):
         """Save login time to file."""
         try:
             self.login_time = datetime.now()
+            self._sent_reminders.clear()
             data = {'login_time': self.login_time.isoformat()}
             with open(self.login_time_file, 'w') as f:
                 json.dump(data, f)
@@ -592,7 +593,7 @@ class WeChatChannel(SlaveChannel):
                     .format(size=file_size / (2 ** 20)))
             r.append(self._bot_send_file(chat, filename, file=msg.file))
             if msg.text:
-                self._bot_send_msg(chat, msg.text)
+                r.append(self._bot_send_msg(chat, msg.text))
             if not msg.file.closed:
                 msg.file.close()
         elif msg.type == MsgType.Video:
@@ -653,9 +654,9 @@ class WeChatChannel(SlaveChannel):
                     ).format(failed=failed, total=len(msg_ids)))
             else:
                 val = (status.message.uid, len(msg_ids))
-                for i in msg_ids:
-                    self.slave_message.recall_msg_id_conversion[str(
-                        i[1])] = val
+                with self.slave_message._recall_lock:
+                    for i in msg_ids:
+                        self.slave_message.recall_msg_id_conversion[str(i[1])] = val
         else:
             raise EFBOperationNotSupported()
 
@@ -814,8 +815,11 @@ class WeChatChannel(SlaveChannel):
     def reauth(self, command=False):
         # Remove wxpy.pkl if last edited earlier than 5 minutes ago.
         last_session = efb_utils.get_data_path(self.channel_id) / "wxpy.pkl"
-        if (time.time() - last_session.stat().st_mtime) < (5 * 60):
-            last_session.unlink()
+        try:
+            if last_session.exists() and (time.time() - last_session.stat().st_mtime) < (5 * 60):
+                last_session.unlink()
+        except OSError:
+            pass
 
         msg = self._("Preparing to log in...")
         qr_reload = self.flag("qr_reload")
@@ -866,7 +870,7 @@ class WeChatChannel(SlaveChannel):
             self.bot.accept_friend(
                 user=username, verify_content=verify_information)
         except wxpy.ResponseError as r:
-            return self._("Error occurred while processing (AF02).") + "n\n{}: {!r}".format(r.err_code, r.err_msg)
+            return self._("Error occurred while processing (AF02).") + "\n\n{}: {!r}".format(r.err_code, r.err_msg)
         return self._("Request accepted.")
 
     def get_chats(self) -> List[Chat]:

@@ -50,6 +50,7 @@ class SlaveMessageManager:
         self.logger: logging.Logger = logging.getLogger(__name__)
         self.wechat_msg_register()
         self.file_download_mutex_lock = threading.Lock()
+        self._recall_lock = threading.Lock()
         # Message ID: [JSON ID, remaining count]
         self.recall_msg_id_conversion: Dict[str, Tuple[str, int]] = dict()
 
@@ -269,7 +270,8 @@ class SlaveMessageManager:
             # check conversion table first
             if recall_id in self.recall_msg_id_conversion:
                 # prevent feedback of messages deleted by master channel.
-                del self.recall_msg_id_conversion[recall_id]
+                with self._recall_lock:
+                    self.recall_msg_id_conversion.pop(recall_id, None)
                 return None
                 # val = self.recall_msg_id_conversion.pop(recall_id)
                 # val[1] -= 1
@@ -501,8 +503,10 @@ class SlaveMessageManager:
             efb_msg.path, efb_msg.mime, efb_msg.file = self.save_file(msg)
             efb_msg.filename = msg.file_name
             # ^ Also throws EOFError
-            if 'gif' in efb_msg.mime and Image.open(efb_msg.path).is_animated:
-                efb_msg.type = MsgType.Animation
+            if 'gif' in efb_msg.mime:
+                with Image.open(efb_msg.path) as img:
+                    if img.is_animated:
+                        efb_msg.type = MsgType.Animation
             efb_msg.text = ""
         except EOFError:
             efb_msg.text += self._("[Failed to download the sticker, please check your phone.]")
@@ -629,21 +633,25 @@ class SlaveMessageManager:
             response = requests.get(url, headers=headers, stream=True, timeout=30)
             response.raise_for_status()
             file: BinaryIO = tempfile.NamedTemporaryFile()
-            for chunk in response.iter_content(1024):
-                file.write(chunk)
-            if file.seek(0, 2) <= 0:
-                raise EOFError('Downloaded file is empty')
-            file.seek(0)
-            mime = magic.from_file(file.name, mime=True)
-            if isinstance(mime, bytes):
-                mime = mime.decode()
-            return Message(
-                type=MsgType.Image,
-                text="",
-                path=Path(file.name),
-                mime=mime,
-                file=file,
-            )
+            try:
+                for chunk in response.iter_content(1024):
+                    file.write(chunk)
+                if file.seek(0, 2) <= 0:
+                    raise EOFError('Downloaded file is empty')
+                file.seek(0)
+                mime = magic.from_file(file.name, mime=True)
+                if isinstance(mime, bytes):
+                    mime = mime.decode()
+                return Message(
+                    type=MsgType.Image,
+                    text="",
+                    path=Path(file.name),
+                    mime=mime,
+                    file=file,
+                )
+            except Exception:
+                file.close()
+                raise
         except Exception as e:
             self.logger.error("Failed to download hongbao image from %s: %s", url, e)
             return Message(

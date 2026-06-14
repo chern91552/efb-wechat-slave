@@ -1,6 +1,7 @@
 # coding: utf-8
 
 import logging
+import threading
 from typing import Optional, List, TYPE_CHECKING, Dict, Any, Tuple
 from uuid import uuid4
 
@@ -37,6 +38,7 @@ class ChatManager:
         )
 
         self.efb_chat_objs: Dict[str, Chat] = {}
+        self._chat_objs_lock = threading.Lock()
         # Cached Chat objects. Key: tuple(chat PUID, group PUID or None)
 
         # Load system chats
@@ -83,17 +85,18 @@ class ChatManager:
         # self.logger.debug("Converting WXPY chat %r, %sin recursive mode", chat, '' if recursive else 'not ')
         # self.logger.debug("WXPY chat with ID: %s, name: %s, alias: %s;", chat.puid, chat.nick_name, chat.alias)
         if chat is None:
-            return self.MISSING_USER
+            return self.MISSING_CHAT
 
-        cache_key = chat.puid
+        cache_key = chat.puid or f"__no_puid_{uuid4()}__"
 
         chat_name, chat_alias = self.get_name_alias(chat)
 
         cached_obj: Optional[Chat] = None
-        if cache_key in self.efb_chat_objs:
-            cached_obj = self.efb_chat_objs[cache_key]
-            if chat_name == cached_obj.name and chat_alias == cached_obj.alias:
-                return cached_obj
+        with self._chat_objs_lock:
+            if cache_key in self.efb_chat_objs:
+                cached_obj = self.efb_chat_objs[cache_key]
+                if chat_name == cached_obj.name and chat_alias == cached_obj.alias:
+                    return cached_obj
 
         # if chat name or alias changes, update cache
         efb_chat: Chat
@@ -116,6 +119,13 @@ class ChatManager:
                         member_name, member_alias = self.get_name_alias(member)
                         efb_chat.add_member(name=member_name, alias=member_alias, uid=member.puid,
                                             vendor_specific={'is_mp': False})
+                # Remove members who left the group
+                removed_ids = local_ids - remote_puids
+                for member_id in removed_ids:
+                    try:
+                        efb_chat.remove_member(member_id)
+                    except (KeyError, ValueError):
+                        pass
         elif chat == chat.bot.self:
             efb_chat = PrivateChat(channel=self.channel, uid=chat_id, name=chat_name,
                                    alias=chat_alias, vendor_specific={'is_mp': True}, other_is_self=True)
@@ -141,7 +151,8 @@ class ChatManager:
         if efb_chat.vendor_specific.get('is_muted', False):
             efb_chat.notification = ChatNotificationState.MENTIONS
 
-        self.efb_chat_objs[cache_key] = efb_chat
+        with self._chat_objs_lock:
+            self.efb_chat_objs[cache_key] = efb_chat
 
         return efb_chat
 

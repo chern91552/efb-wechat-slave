@@ -40,7 +40,8 @@ class DataModel:
         if not self.config_path.exists():
             self.build_default_config()
         else:
-            self.data = self.yaml.load(self.config_path.open())
+            with self.config_path.open() as f:
+                self.data = self.yaml.load(f)
 
     def build_default_config(self):
         s = _(
@@ -90,7 +91,7 @@ flags_settings = {
            '        Note: QR code might change frequently.'
            )),
     "on_log_out":
-        ("idle", 'choices', ['idle', 'reauth', 'command'],
+        ("command", 'choices', ['idle', 'reauth', 'command'],
          _('Behavior when WeChat server logged your account out.\n'
            '\n'
            'Options:\n'
